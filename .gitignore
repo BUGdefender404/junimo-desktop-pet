@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# 运行日志
+junimo_debug.log
+junimo_error.log
+
+# 本机状态（位置记忆 / 个人待办数据，不上传）
+pet_config.json
+todo.json
+
+# 程序自动生成的素材缓存（可随时再生）
+素材/睡觉_已抠图.png
+素材/表情*_头像.png
