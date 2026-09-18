@@ -474,17 +474,26 @@ class TodoPanel(QWidget):
         title_row = QHBoxLayout()
         title = QLabel("今日待办")
         title.setStyleSheet("color:#ffd94a; font-weight:bold; font-size:15px;")
-        close = QPushButton("×")
-        close.setFixedSize(22, 22)
+        close = QPushButton("✕")
+        close.setFixedSize(26, 26)
         close.setCursor(Qt.PointingHandCursor)
+        close.setToolTip("关闭")
         close.setStyleSheet(
-            "QPushButton{color:#999;border:none;background:transparent;font-size:15px;}"
-            "QPushButton:hover{color:#fff;background:#444;border-radius:11px;}")
+            "QPushButton{color:#ddd;border:1px solid #4a4a56;background:#2e2e38;"
+            "border-radius:13px;font-size:13px;}"
+            "QPushButton:hover{color:#fff;background:#7a3838;border-color:#9a4a4a;}")
         close.clicked.connect(self.hide)
         title_row.addWidget(title)
         title_row.addStretch(1)
         title_row.addWidget(close)
         root.addLayout(title_row)
+
+        # 标题和内容之间的分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background:#41414d; border:none;")
+        root.addWidget(line)
 
         self.list_area = QScrollArea()
         self.list_area.setWidgetResizable(True)
@@ -511,14 +520,14 @@ class TodoPanel(QWidget):
         self.time_btn.setFixedWidth(122)
         self.time_btn.setCursor(Qt.PointingHandCursor)
         self.time_btn.clicked.connect(self._toggle_calendar)
-        self.time_btn.setEnabled(False)
         self._update_time_btn()
         self.time_btn.setStyleSheet(
             "QPushButton{background:#1c1c22;color:#8fc7ff;border:1px solid #454550;"
             "border-radius:6px;padding:3px;font-size:12px;}"
-            "QPushButton:hover{border-color:#6a6a7a;}"
-            "QPushButton:disabled{color:#666;background:#191920;border-color:#333;}")
-        self.time_check.toggled.connect(self.time_btn.setEnabled)
+            "QPushButton:hover{border-color:#6a6a7a;}")
+        # 没勾「提醒」时时间按钮直接隐藏，勾了才出现（避免一行里常驻一块灰按钮）
+        self.time_btn.setVisible(False)
+        self.time_check.toggled.connect(self.time_btn.setVisible)
         add_btn = QPushButton("添加")
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.clicked.connect(self._add)
@@ -613,6 +622,7 @@ class TodoPanel(QWidget):
 
         self.list_area.setFixedHeight(max(110, min(240, self.list_host.sizeHint().height() + 6)))
         self._save()
+        self._resize_to_content()
 
     def _add(self):
         text = self.input.text().strip()
@@ -626,14 +636,22 @@ class TodoPanel(QWidget):
     def _update_time_btn(self):
         self.time_btn.setText(f"{self.picker_dt.month}/{self.picker_dt.day} {self.picker_dt:%H:%M}")
 
+    def _resize_to_content(self):
+        """按当前内容收放面板高度。日历收起后若面板仍保持展开时的高度，
+        中间会空出一大块，非常难看；增删待办时也要跟着长高/变矮。"""
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+        self.adjustSize()
+        if self.isVisible():
+            self._ensure_on_screen()
+
     def _toggle_calendar(self):
         show = not self.cal_box.isVisible()
         self.cal_box.setVisible(show)
         if show:
             self.cal.setSelectedDate(QDate(self.picker_dt.year, self.picker_dt.month, self.picker_dt.day))
             self.cal_time.setTime(QTime(self.picker_dt.hour, self.picker_dt.minute))
-            self.adjustSize()
-            self._ensure_on_screen()
+        self._resize_to_content()
 
     def _confirm_calendar(self):
         d = self.cal.selectedDate()
@@ -641,6 +659,7 @@ class TodoPanel(QWidget):
         self.picker_dt = datetime(d.year(), d.month(), d.day(), t.hour(), t.minute())
         self._update_time_btn()
         self.cal_box.setVisible(False)
+        self._resize_to_content()
 
     def _ensure_on_screen(self):
         """展开日历后面板会变高，保证整体都在屏幕内。"""
