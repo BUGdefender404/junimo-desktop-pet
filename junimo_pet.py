@@ -49,7 +49,7 @@ WANDER_RADIUS = 260          # 在小屋左右多大范围里散步
 
 IDLE_DOZE_S = 600            # 鼠标键盘闲置多少秒后睡觉
 IDLE_SAD_S = 300             # 闲置多少秒后先冒一个「无语」
-NIGHT_START, NIGHT_END = 0, 8  # 凌晨 0-8 点熟睡
+NIGHT_START, NIGHT_END = 23, 8  # 晚上 23 点提醒休息并入睡，早上 8 点自动醒
 
 CURSOR_NEAR_PX = 140         # 鼠标距离多近算「在旁边」
 CURSOR_COOLDOWN_S = 15       # 凑近/害羞行为触发后多久内不再触发
@@ -77,10 +77,11 @@ def debug_log(msg: str):
 
 
 # ----------------------------------------------------------------------------
-# Windows 闲置检测（鼠标键盘多久没动过）
+# Windows 闲置检测（鼠标键盘多久没动过）+ 全屏前台检测
 # ----------------------------------------------------------------------------
 if sys.platform == "win32":
-    from ctypes import Structure, byref, c_uint, sizeof, windll
+    from ctypes import (Structure, byref, c_long, c_uint, create_unicode_buffer,
+                        sizeof, windll)
 
     class _LastInputInfo(Structure):
         _fields_ = [("cbSize", c_uint), ("dwTime", c_uint)]
@@ -94,6 +95,45 @@ if sys.platform == "win32":
         except Exception:
             pass
         return 0.0
+
+    _WS_CAPTION = 0x00C00000
+    _WS_THICKFRAME = 0x00040000
+
+    class _RECT(Structure):
+        _fields_ = [("left", c_long), ("top", c_long),
+                    ("right", c_long), ("bottom", c_long)]
+
+    class _MONITORINFO(Structure):
+        _fields_ = [("cbSize", c_uint), ("rcMonitor", _RECT),
+                    ("rcWork", _RECT), ("dwFlags", c_uint)]
+
+    def fullscreen_active() -> bool:
+        """前台是不是无边框全屏窗口（B 站客户端全屏、全屏视频、游戏等）。
+        桌面和任务栏不算；带标题栏/可调边框的普通窗口不算。"""
+        try:
+            user32 = windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            buf = create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, buf, 64)
+            if buf.value in ("Progman", "WorkerW", "Shell_TrayWnd"):
+                return False
+            if user32.GetWindowLongW(hwnd, -16) & (_WS_CAPTION | _WS_THICKFRAME):
+                return False
+            rect = _RECT()
+            if not user32.GetWindowRect(hwnd, byref(rect)):
+                return False
+            mi = _MONITORINFO()
+            mi.cbSize = sizeof(mi)
+            mon = user32.MonitorFromWindow(hwnd, 2)   # MONITOR_DEFAULTTONEAREST
+            if not mon or not user32.GetMonitorInfoW(mon, byref(mi)):
+                return False
+            return (rect.left <= mi.rcMonitor.left and rect.top <= mi.rcMonitor.top
+                    and rect.right >= mi.rcMonitor.right
+                    and rect.bottom >= mi.rcMonitor.bottom)
+        except Exception:
+            return False
 else:
     _last_cursor = None
     _last_active = time.time()
@@ -106,9 +146,15 @@ else:
             _last_active = time.time()
         return time.time() - _last_active
 
+    def fullscreen_active() -> bool:
+        return False
+
 
 def in_night() -> bool:
-    return NIGHT_START <= datetime.now().hour < NIGHT_END
+    h = datetime.now().hour
+    if NIGHT_START <= NIGHT_END:
+        return NIGHT_START <= h < NIGHT_END
+    return h >= NIGHT_START or h < NIGHT_END      # 跨零点的作息（23 点-次日 8 点）
 
 
 # ----------------------------------------------------------------------------
@@ -742,6 +788,10 @@ class PetWindow(QWidget):
         self.cursor_cooldown = 0.0
         self.sad_shown = False
         self.force_sleep = False      # 托盘菜单手动要求睡觉
+        self._night_sleep = False     # 这次睡觉是因为夜间作息（到点要自动醒）
+        self._rest_said = None        # 最近一次说「该休息了」的日期（每晚只说一次）
+        self._fs_hidden = False       # 当前因全屏应用而临时隐藏
+        self._fs_restore = {}         # 全屏前各窗口的可见状态，退出后恢复
         self._error_cooldown = 0.0
         self._came_out_at = 0.0       # 刚从小屋出来的时间（防止连击误触又藏回去）
         self.emote_win = EmoteWindow()
@@ -763,9 +813,11 @@ class PetWindow(QWidget):
         self.tick_timer.timeout.connect(self.on_tick)
         self.tick_timer.start()
 
-        # 每秒检查一次有没有到点的待办
+        # 每秒检查一次有没有到点的待办 + 夜间作息 + 是否在全屏看视频
         self.remind_timer = QTimer(self, interval=1000)
         self.remind_timer.timeout.connect(self._check_reminders)
+        self.remind_timer.timeout.connect(self._check_night_rest)
+        self.remind_timer.timeout.connect(self._check_fullscreen)
         self.remind_timer.start()
 
     def _check_reminders(self):
@@ -776,6 +828,8 @@ class PetWindow(QWidget):
         if not due:
             return
         debug_log(f"待办提醒: {due}")
+        if self._fs_hidden:
+            return        # 全屏看视频/游戏中：只记录已提醒，不弹窗打扰
         if self.state == "hidden":
             self.come_out()
         elif self.state == "sleep":
@@ -783,6 +837,41 @@ class PetWindow(QWidget):
         self.show_bubble("感叹")
         self.toast.show_text("待办提醒：" + "、".join(due))
         self._sync_emote()
+
+    def _check_night_rest(self):
+        """晚上 23 点（NIGHT_START）提醒一次休息；之后作息自动让它走去睡觉。"""
+        now = datetime.now()
+        if now.hour != NIGHT_START or self._rest_said == now.date():
+            return
+        self._rest_said = now.date()
+        if self.state in ("hidden", "sleep") or self._fs_hidden:
+            return
+        debug_log("夜间休息提醒")
+        self.show_bubble("感叹")
+        self.toast.show_text(f"{NIGHT_START} 点啦，该休息了，晚安~")
+        self._sync_emote()
+
+    def _fs_windows(self):
+        # 固定列表：隐藏前记录各窗口可见性，恢复时才不会漏掉已藏起来的面板
+        return [self, self.hut, self.emote_win, self.toast, self.todo]
+
+    def _check_fullscreen(self):
+        """看全屏视频/游戏时宠物和小屋自动让位，退出全屏自动回来。
+        恢复时只把全屏前可见的窗口请回来，用户自己藏的不会被吵醒。"""
+        fs = fullscreen_active()
+        if fs and not self._fs_hidden:
+            self._fs_hidden = True
+            self._fs_restore = {id(w): w.isVisible() for w in self._fs_windows()}
+            for w in self._fs_windows():
+                w.hide()
+            debug_log("全屏中 -> 暂时隐藏宠物和小屋")
+        elif not fs and self._fs_hidden:
+            self._fs_hidden = False
+            debug_log("全屏结束 -> 恢复显示")
+            for w in self._fs_windows():
+                if self._fs_restore.get(id(w)):
+                    w.show()
+            self._raise_stack()
 
     # ---------------- 基础小工具 ----------------
     def _raise_stack(self):
@@ -918,11 +1007,20 @@ class PetWindow(QWidget):
             return
 
         if self.state == "sleep":
-            if not self.force_sleep and not in_night() and idle < 3:
+            if self.force_sleep and not self._night_sleep:
+                return                        # 手动要求睡的，只等主人唤醒
+            if self._night_sleep:
+                if not in_night():            # 夜间作息：早上到点自动醒，不用等鼠标动
+                    self._wake()
+            elif idle < 3:                    # 闲置打盹：有动静就醒
                 self._wake()
             return
 
         if self.state == "go_home":
+            if self._night_sleep and not in_night():
+                self.state = "idle"           # 走回去的路上跨过了早上醒来的点
+                self.walk_target_x = None
+                return
             if not self.force_sleep and not in_night() and idle < 3:
                 self.state = "idle"
                 self.walk_target_x = None
@@ -1093,7 +1191,10 @@ class PetWindow(QWidget):
         self.update()
 
     def _start_go_home(self):
+        was_forced = self.force_sleep
         self.force_sleep = self.force_sleep or in_night()
+        # 夜间作息引起的回家要记上标记，早上到点自动醒；手动睡觉不算
+        self._night_sleep = in_night() and not was_forced
         self.state = "go_home"
         # 走到小屋墙边睡，小屋正面留出来方便双击/三击
         front = self._beside_hut_x()
@@ -1113,6 +1214,7 @@ class PetWindow(QWidget):
     def _wake(self):
         self.state = "idle"
         self.force_sleep = False
+        self._night_sleep = False
         self.sad_shown = False
         self.next_decide = time.time() + 2
         self.next_random_bubble = time.time() + random.uniform(*RANDOM_BUBBLE_EVERY)
@@ -1141,6 +1243,7 @@ class PetWindow(QWidget):
             return
         if self.state in ("sleep", "go_home"):
             self.force_sleep = False
+            self._night_sleep = False
             if self.state == "sleep":
                 self._wake()
             else:
@@ -1295,6 +1398,8 @@ def main():
             hut.raise_()
             pet.raise_()          # 祝尼魔始终在小屋之上
         debug_log(f"托盘切换小屋 -> {'显示' if visible else '隐藏'} (pos={hut.x()},{hut.y()})")
+        if pet._fs_hidden:
+            pet._fs_restore[id(hut)] = visible   # 全屏期间手动切换，别让恢复逻辑覆盖
         act_show_hut.setText("显示小屋" if not visible else "隐藏小屋")
         pet._raise_stack()
 
