@@ -26,11 +26,11 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QPoint, QTime, Qt, QLockFile, QTimer, QDate
-from PySide6.QtGui import QAction, QCursor, QFont, QIcon, QImage, QImageReader, QPainter, QPixmap
+from PySide6.QtCore import QPoint, QTime, Qt, QEvent, QLockFile, QTimer, QDate
+from PySide6.QtGui import QAction, QCursor, QColor, QFont, QIcon, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QCalendarWidget, QCheckBox, QFrame, QHBoxLayout, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea,
-                               QSystemTrayIcon, QTimeEdit, QVBoxLayout, QWidget)
+                               QSystemTrayIcon, QTableView, QTimeEdit, QVBoxLayout, QWidget)
 
 # ----------------------------------------------------------------------------
 # 可调参数（改完保存重新运行即可生效）
@@ -320,13 +320,16 @@ class ToastWindow(QWidget):
 # 日历样式（内嵌在待办面板里展开，避免独立弹窗的点击问题）
 # ----------------------------------------------------------------------------
 CAL_QSS = """
+    QCalendarWidget QWidget#qt_calendar_navigationbar { background: #2a2a34; }
     QCalendarWidget QWidget { alternate-background-color: #2a2a34; }
     QCalendarWidget QToolButton { background: #3a3a46; color: #eee; border-radius: 4px;
                                   padding: 4px 8px; font-size: 12px; }
     QCalendarWidget QToolButton:hover { background: #4a4a58; }
+    QCalendarWidget QToolButton:pressed { background: #55555f; }
     QCalendarWidget QToolButton::menu-indicator { image: none; }
     QCalendarWidget QMenu { background: #2a2a34; color: #eee; }
     QCalendarWidget QSpinBox { background: #1c1c22; color: #eee; }
+    QCalendarWidget QWidget#qt_calendar_yearedit { background: #1c1c22; color: #eee; }
     QCalendarWidget #qt_calendar_calendarview { background: #1c1c22; color: #ddd;
                                                 selection-background-color: #3f8a30; }
     QCalendarWidget QAbstractItemView:enabled { color: #ddd; }
@@ -337,6 +340,64 @@ CAL_QSS = """
                   border-radius: 6px; padding: 4px 12px; font-size: 12px; }
     QPushButton:hover { background: #4da63c; }
 """
+
+
+class HoverCalendar(QCalendarWidget):
+    """给日期格子加悬停高亮框：鼠标放到哪天，哪天就描一个绿框。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hover = None
+        self.setMouseTracking(True)
+        self._view = self.findChild(QTableView)
+        if self._view:
+            self._view.setMouseTracking(True)
+            self._view.viewport().setMouseTracking(True)
+            self._view.viewport().installEventFilter(self)
+
+    def _cell_date(self, row: int, col: int):
+        """以「本月 1 号所在格子」为锚点换算网格日期。锚点运行时实测
+        （全网格第一个显示 1 的格子），不依赖 locale 的周起始设置。"""
+        model = self._view.model()
+        for r in range(model.rowCount()):
+            for c in range(model.columnCount()):
+                if model.index(r, c).data() in (1, "1"):
+                    first = QDate(self.yearShown(), self.monthShown(), 1)
+                    return first.addDays((row - r) * 7 + (col - c))
+        return QDate()
+
+    def _date_at(self, vx: float, vy: float):
+        """由表格视口坐标算出对应日期。QCalendarWidget::dateAt 在 PySide6
+        里没有绑定，改走内部表格的 indexAt + 锚点换算。"""
+        view = self._view
+        if view is None:
+            return QDate()
+        idx = view.indexAt(QPoint(int(vx), int(vy)))
+        if not idx.isValid():
+            return QDate()
+        return self._cell_date(idx.row(), idx.column())
+
+    def eventFilter(self, obj, ev):
+        if self._view and obj is self._view.viewport():
+            if ev.type() == QEvent.MouseMove:
+                d = self._date_at(ev.position().x(), ev.position().y())
+                if d != self._hover:
+                    self._hover = d
+                    self.updateCells()
+            elif ev.type() == QEvent.Leave:
+                if self._hover is not None:
+                    self._hover = None
+                    self.updateCells()
+        return super().eventFilter(obj, ev)
+
+    def paintCell(self, painter, rect, date):
+        super().paintCell(painter, rect, date)
+        if date.isValid() and self._hover is not None and date == self._hover:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(QColor("#7ddb58"), 2))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -2, -2), 4, 4)
+            painter.restore()
 
 
 # ----------------------------------------------------------------------------
@@ -473,7 +534,7 @@ class TodoPanel(QWidget):
         cv = QVBoxLayout(self.cal_box)
         cv.setContentsMargins(4, 4, 4, 6)
         cv.setSpacing(6)
-        self.cal = QCalendarWidget()
+        self.cal = HoverCalendar()
         self.cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         self.cal.setGridVisible(True)
         cv.addWidget(self.cal)
@@ -920,7 +981,7 @@ class PetWindow(QWidget):
             self.walk_target_x = max(min(target, geo.right() - PET_W), geo.left())
             self.walk_speed = WALK_SPEED + 1
             if random.random() < 0.35:
-                self.show_bubble("感叹")
+                self.show_bubble("困扰")
         elif roll < 0.85:                       # 害羞地跑开
             away = 1 if self.x() <= cursor.x() else -1
             left, right = self._wander_bounds()
@@ -1083,7 +1144,7 @@ class PetWindow(QWidget):
         if self._drag_moved:
             if not self._drag_bubbled:
                 self._drag_bubbled = True
-                self.show_bubble("困扰")
+                self.show_bubble("感叹")
             self._base = gp - self._press
             self.move(self._base)
             self._sync_emote()
@@ -1110,6 +1171,8 @@ class PetWindow(QWidget):
         self.next_decide = time.time() + 2
 
     def _on_hut_moved(self):
+        if clamp_into_virtual(self.hut):
+            debug_log(f"小屋拖动落点钳回屏幕内 -> ({self.hut.x()},{self.hut.y()})")
         save_config(self)
         self.follow_hut()
 
@@ -1136,6 +1199,18 @@ def load_config():
         return cfg.get("hut"), cfg.get("pet")
     except Exception:
         return None, None
+
+
+def clamp_into_virtual(widget):
+    """把窗口拉回虚拟桌面内。显示缩放/显示器变化后，旧坐标可能落在屏幕外
+    （表现为窗口「可见」却永远看不到），所以在启动/显示/拖动落点都要钳一次。"""
+    vg = QApplication.primaryScreen().virtualGeometry()
+    x = max(vg.left(), min(widget.x(), vg.right() - widget.width() + 1))
+    y = max(vg.top(), min(widget.y(), vg.bottom() - widget.height() + 1))
+    if (x, y) != (widget.x(), widget.y()):
+        widget.move(x, y)
+        return True
+    return False
 
 
 # ----------------------------------------------------------------------------
@@ -1165,6 +1240,8 @@ def main():
         hut_x = screen.right() - hut_w - 80
         hut_y = screen.bottom() - hut_h - 10
     pet.hut.move(hut_x, hut_y)
+    if clamp_into_virtual(pet.hut):
+        debug_log(f"启动时小屋坐标在屏幕外，已钳回 ({pet.hut.x()},{pet.hut.y()})")
 
     if pet_cfg:
         pet_x, pet_y = pet_cfg
@@ -1172,6 +1249,7 @@ def main():
         pet_x = hut_x + hut_w // 2 - PET_W // 2
         pet_y = hut_y + hut_h - PET_W
     pet.set_base(QPoint(pet_x, pet_y))
+    pet._clamp_on_screen()
 
     # 托盘
     tray = QSystemTrayIcon(QIcon(pet.frames[0]), app)
@@ -1187,8 +1265,18 @@ def main():
 
     def toggle_hut():
         act_hut_visible[0] = not act_hut_visible[0]
-        pet.hut.setVisible(act_hut_visible[0])
-        act_show_hut.setText("显示小屋" if not act_hut_visible[0] else "隐藏小屋")
+        visible = act_hut_visible[0]
+        hut = pet.hut
+        hut.setVisible(visible)
+        if visible:
+            # 防御：旧坐标/缩放变化可能把小屋留在屏幕外，显示前先钳回来再置顶
+            if clamp_into_virtual(hut):
+                debug_log(f"显示小屋时钳回屏幕内 -> ({hut.x()},{hut.y()})")
+            hut.show()
+            hut.raise_()
+            pet.raise_()          # 祝尼魔始终在小屋之上
+        debug_log(f"托盘切换小屋 -> {'显示' if visible else '隐藏'} (pos={hut.x()},{hut.y()})")
+        act_show_hut.setText("显示小屋" if not visible else "隐藏小屋")
         pet._raise_stack()
 
     act_show_hut.triggered.connect(toggle_hut)
