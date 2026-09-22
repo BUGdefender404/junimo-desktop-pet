@@ -13,3 +13,8 @@ todo.json
 # 程序自动生成的素材缓存（可随时再生）
 素材/睡觉_已抠图.png
 素材/表情*_头像.png
+
+# PyInstaller 打包中间产物（成品 exe 在仓库根目录，是要发布的）
+build/
+dist/
+*.spec

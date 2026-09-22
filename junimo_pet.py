@@ -60,7 +60,12 @@ BUBBLE_POOL = {"开心": 3, "感叹": 2, "无语": 2, "困扰": 1, "错误": 1}
 
 TODO_SECONDS = 15            # 待办提醒气泡停留时长（秒）
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe 后 __file__ 指向临时解压目录，一律以 exe 所在目录为家：
+# 素材、配置、待办、日志都和 exe 放在一起（双击 exe 或跑 bat 都一样用）
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.join(BASE_DIR, "素材")
 CONFIG_PATH = os.path.join(BASE_DIR, "pet_config.json")
 TODO_PATH = os.path.join(BASE_DIR, "todo.json")
