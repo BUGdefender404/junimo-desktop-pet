@@ -14,7 +14,8 @@ todo.json
 素材/睡觉_已抠图.png
 素材/表情*_头像.png
 
-# PyInstaller 打包中间产物（成品 exe 在仓库根目录，是要发布的）
+# PyInstaller 打包中间产物（成品 exe 通过 GitHub Releases 发布，不进仓库）
 build/
 dist/
 *.spec
+祝尼魔桌面宠物.exe

@@ -4,7 +4,7 @@
 
 ## 怎么运行
 
-**方式一（推荐，无需 Python）**：双击 **祝尼魔桌面宠物.exe**，祝尼魔和小屋就会出现在屏幕右下角。
+**方式一（推荐，无需 Python）**：到 [Releases](../../releases) 页下载 `祝尼魔桌面宠物_vX.Y.zip`，解压后双击 **祝尼魔桌面宠物.exe**，祝尼魔和小屋就会出现在屏幕右下角。
 
 **方式二（脚本版）**：
 
@@ -16,7 +16,7 @@
 
 两种方式只能同时开一个（程序自己会拦重复启动）；配置和待办数据共用。退出：右键点击任务栏右下角的祝尼魔托盘图标 → **退出**。
 
-exe 由 PyInstaller 打包：`pyinstaller --onefile --windowed --name 祝尼魔桌面宠物 --icon 祝尼魔.ico junimo_pet.py`，改完代码想重新出 exe 跑这条命令即可。
+想自己从源码打包 exe：`pyinstaller --onefile --windowed --name 祝尼魔桌面宠物 --icon 祝尼魔.ico junimo_pet.py`（素材文件夹要和生成的 exe 放在一起）。
 
 ## 它会做什么
 
@@ -71,7 +71,6 @@ exe 由 PyInstaller 打包：`pyinstaller --onefile --windowed --name 祝尼魔�
 ## 文件说明
 
 ```
-祝尼魔桌面宠物.exe   打包好的单文件程序（双击即用，无需 Python）
 junimo_pet.py        主程序（全部逻辑都在这一个文件里）
 启动祝尼魔.bat       双击启动脚本版（无黑窗口）
 祝尼魔.ico           exe 图标
@@ -83,3 +82,9 @@ todo.json            今日待办数据（自动生成，随面板编辑实时�
 junimo_debug.log     自动生成的活动日志（记录每次互动和状态切换），可以随时删除
 junimo_error.log     只在程序内部出错时生成，欢迎把它发给开发者
 ```
+
+## 开源协议
+
+代码以 [MIT License](LICENSE) 开源。
+
+素材说明：祝尼魔（Junimo）形象素材来自《星露谷物语》(Stardew Valley)，版权归 ConcernedApe 所有。本项目为非商业粉丝作品，仅用于个人学习与娱乐。
